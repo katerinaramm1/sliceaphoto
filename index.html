@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Slice a Photo</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f3ed;color:#212820;font:16px/1.55 system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:48px 20px}header{margin-bottom:28px}h1{font-size:clamp(3rem,9vw,6rem);line-height:1;margin:0;letter-spacing:-.075em}p{margin:.6em 0}section{background:#fff;border:1px solid #dcdfd4;border-radius:22px;padding:clamp(16px,4vw,30px);margin-bottom:20px}.drop{display:grid;place-items:center;min-height:145px;padding:20px;border:2px dashed #8b9b78;border-radius:14px;background:#f6f9ef;text-align:center}.drop.over{background:#e6f2d4}button,select,a.save{font:inherit;border:1px solid #bbc4b3;border-radius:9px;padding:9px 13px;background:#fff;color:inherit}button,a.save{cursor:pointer}button.primary{background:#29462c;color:white;border-color:#29462c;font-weight:700}button:disabled{opacity:.55;cursor:wait}.controls,.actions{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin-top:16px}label{display:grid;gap:4px;font-weight:600}.hint,footer{color:#4b5649;font-size:.92rem}h2,h3{margin:.35em 0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:20px}.tile{min-width:0;background:#f4f5f0;padding:7px;border-radius:10px}.tile img{display:block;width:100%;aspect-ratio:4/5;object-fit:contain;background:#e6e9e0;border-radius:5px}.tile a{display:block;text-align:center;font-size:.85rem;padding:5px;margin-top:6px}a{color:#29462c}footer{margin-top:24px}@media(max-width:530px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}[hidden]{display:none!important}
+#theme{float:right}html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#161b17;color:#e8eee4}html[data-theme=dark] section,html[data-theme=dark] button,html[data-theme=dark] select,html[data-theme=dark] a.save{background:#232c24;border-color:#536351}html[data-theme=dark] .drop,html[data-theme=dark] .tile,html[data-theme=dark] .tile img{background:#2b372c}html[data-theme=dark] .drop.over{background:#3a5038}html[data-theme=dark] .hint,html[data-theme=dark] footer,html[data-theme=dark] a{color:#c5d6bc}html[data-theme=dark] button.primary{background:#c7e5af;color:#192b18}
+.smart{display:block;margin-top:16px}
+</style>
+<main>
+<header><button id="theme" type="button" aria-pressed="false">Dark mode</button><h1>Slice a Photo</h1><p>Turn one tall image into 20 numbered horizontal slices.</p></header>
+<section aria-label="Image and export settings">
+<div class="drop" id="drop"><label for="file">Drop one tall image here or choose a file</label><input id="file" type="file" accept="image/*"></div>
+<div class="actions"><button id="sample">Try a sample image</button></div>
+<div class="controls">
+<label>Slice size<select id="size"><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original width</option></select></label>
+<label>Format<select id="format"><option value="jpeg">JPG</option><option value="png">PNG</option></select></label>
+<label id="qualityLabel">JPG quality <output id="qualityText">90%</output><input id="quality" type="range" min="50" max="100" value="90"></label>
+</div>
+<label class="smart"><input type="checkbox" id="smart" aria-describedby="smartHint"> Smart cuts</label>
+<p class="hint" id="smartHint">Look for quiet gaps near each cut to reduce splits through text. Content heights can vary, and padding keeps the exported files the same size.</p>
+<p class="hint">Every slice includes the full image width. Presets scale each slice proportionally and add padding as needed. Original width keeps the source width and fits every slice into the same whole-pixel output height.</p>
+<p id="status" role="status">Your image is processed on your device.</p>
+</section>
+<section id="results" hidden>
+<h2>Preview all 20 slices</h2>
+<p class="hint">For an X carousel-style thread, attach four images per post in order and add each new post as a reply to the previous one.</p>
+<button class="primary" id="zip">Download all 20 as ZIP</button>
+<div id="previews"></div>
+</section>
+<footer>Created by @katerinaramm1 on X with ChatGPT Plus. Slice a Photo is an independent tool and is not affiliated with X.</footer>
+</main>
+<script>
+'use strict';
+const count = 20;
+const get = id => document.getElementById(id);
+const [file, drop, sample, size, format, quality, status, results, previews, zip] =
+  ['file','drop','sample','size','format','quality','status','results','previews','zip'].map(get);
+const smart = get('smart');
+const theme = get('theme');
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+let preferredTheme;
+try { preferredTheme = localStorage.getItem('slice-a-photo-theme'); } catch {}
+function applyTheme() {
+  const dark = preferredTheme ? preferredTheme === 'dark' : systemTheme.matches;
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  theme.setAttribute('aria-pressed', String(dark));
+}
+theme.addEventListener('click', () => {
+  preferredTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('slice-a-photo-theme', preferredTheme); } catch {}
+  applyTheme();
+});
+systemTheme.addEventListener('change', applyTheme);
+applyTheme();
+let source, sourceName, entries = [], revision = 0, upload = 0, timer;
+function clearResults() {
+  results.hidden = true;
+  previews.replaceChildren();
+  entries.forEach(entry => URL.revokeObjectURL(entry.url));
+  entries = [];
+}
+function schedule() {
+  clearTimeout(timer);
+  const job = ++revision;
+  clearResults();
+  if (!source) return;
+  status.textContent = 'Preparing 20 slices…';
+  timer = setTimeout(() => render(job), 100);
+}
+async function loadImage(selected) {
+  if (!selected) return;
+  const request = ++upload;
+  source = null;
+  schedule();
+  status.textContent = 'Opening image…';
+  const url = URL.createObjectURL(selected);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (request !== upload) return;
+    if (image.naturalHeight <= image.naturalWidth || image.naturalHeight < count) {
+      throw new Error('Choose a vertical image that is at least 20 pixels tall.');
+    }
+    source = image;
+    sourceName = selected.name;
+    schedule();
+  } catch (error) {
+    if (request === upload) status.textContent = error.message.startsWith('Choose') ?
+      error.message : 'This image could not be opened. Try a JPG, PNG or WebP.';
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+file.addEventListener('change', () => {
+  loadImage(file.files[0]);
+  file.value = '';
+});
+drop.addEventListener('dragover', event => { event.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', event => {
+  event.preventDefault();
+  drop.classList.remove('over');
+  if (event.dataTransfer.files.length === 1) loadImage(event.dataTransfer.files[0]);
+});
+sample.addEventListener('click', () => {
+  ++upload;
+  const demo = document.createElement('canvas');
+  demo.width = 240;
+  demo.height = 6000;
+  const context = demo.getContext('2d');
+  context.textAlign = 'center';
+  for (let index = 0; index < count; index++) {
+    const y = index * 300;
+    context.fillStyle = 'hsl(' + (80 + index * 13) + ' 44% 83%)';
+    context.fillRect(0, y, 240, 300);
+    context.fillStyle = '#263c2b';
+    context.fillRect(25 + index * 8, y, 4, 300);
+    context.font = 'bold 50px system-ui';
+    context.fillText(String(index + 1).padStart(2,'0'), 120, y + 170);
+  }
+  source = demo;
+  sourceName = 'Sample image';
+  schedule();
+});
+for (const control of [size, format, quality, smart]) {
+  control.addEventListener('input', () => {
+    get('qualityLabel').hidden = format.value === 'png';
+    get('qualityText').value = quality.value + '%';
+    if (source) schedule();
+  });
+}
+function findCuts(image, width, height) {
+  const step = height / count;
+  const cuts = Array.from({length: count + 1}, (_, index) => index * step);
+  const radius = Math.floor(step * 0.18);
+  if (!smart.checked || radius < 2) return cuts;
+
+  const scan = document.createElement('canvas');
+  scan.width = Math.min(640, width);
+  scan.height = Math.min(181, radius * 2 + 5);
+  const ctx = scan.getContext('2d', {willReadFrequently: true});
+  for (let cut = 1; cut < count; cut++) {
+    const ideal = cuts[cut];
+    const center = Math.round(ideal);
+    const top = center - radius - 2;
+    const bandHeight = 2 * radius + 5;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, scan.width, scan.height);
+    ctx.drawImage(image, 0, top, width, bandHeight, 0, 0, scan.width, scan.height);
+    const {data} = ctx.getImageData(0, 0, scan.width, scan.height);
+    const stride = scan.width * 4;
+    const contrast = (a, b) => Math.max(
+      Math.abs(data[a] - data[b]),
+      Math.abs(data[a + 1] - data[b + 1]),
+      Math.abs(data[a + 2] - data[b + 2])
+    );
+    const activity = new Float64Array(scan.height);
+    for (let row = 1; row < scan.height; row++) {
+      for (let x = 1; x < scan.width; x++) {
+        const pixel = row * stride + x * 4;
+        activity[row] += Math.max(0, contrast(pixel, pixel - 4) - 10)
+          + Math.max(0, contrast(pixel, pixel - stride) - 10);
+      }
+      activity[row] /= scan.width;
+    }
+    let best = Infinity;
+    for (let row = 2; row < scan.height - 2; row++) {
+      const y = top + Math.round(row * bandHeight / scan.height);
+      const distance = Math.abs(y - ideal);
+      if (distance > radius) continue;
+      const score = (activity[row - 1] + 2 * activity[row] + activity[row + 1]) / 4
+        + 1.5 * distance / radius;
+      if (score < best) {
+        best = score;
+        cuts[cut] = y;
+      }
+    }
+  }
+  return cuts;
+}
+async function render(job) {
+  const image = source;
+  const originalWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const original = size.value === 'original';
+  const mime = 'image/' + format.value;
+  const qualityValue = Number(quality.value) / 100;
+  const extension = mime === 'image/png' ? 'png' : 'jpg';
+  const canvas = document.createElement('canvas');
+  const generated = [];
+  try {
+    const cuts = findCuts(image, originalWidth, sourceHeight);
+    const heights = cuts.slice(1).map((bottom, index) => bottom - cuts[index]);
+    const maxHeight = Math.max(...heights);
+    canvas.width = original ? originalWidth : 1080;
+    canvas.height = original ? Math.ceil(maxHeight - 1e-9) : Number(size.value);
+    const width = canvas.width;
+    const height = canvas.height;
+    const scale = original ? 1 : Math.min(width / originalWidth, height / maxHeight);
+    const drawnWidth = originalWidth * scale;
+    const context = canvas.getContext('2d');
+    for (let index = 0; index < count; index++) {
+      const sliceHeight = heights[index];
+      const drawnHeight = sliceHeight * scale;
+      context.clearRect(0, 0, width, height);
+      if (mime === 'image/jpeg') {
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, width, height);
+      }
+      context.drawImage(image, 0, cuts[index], originalWidth, sliceHeight,
+        (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, mime, qualityValue));
+      if (job !== revision) return;
+      if (!blob || blob.type !== mime) throw new Error('Image encoding failed');
+      generated.push({name:'slice_' + String(index + 1).padStart(2,'0') + '.' + extension, blob});
+    }
+    entries = generated.map(entry => ({...entry, url:URL.createObjectURL(entry.blob)}));
+    for (let start = 0; start < count; start += 4) {
+      const heading = document.createElement('h3');
+      heading.textContent = 'X thread post ' + (start / 4 + 1);
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      entries.slice(start, start + 4).forEach((entry, offset) => {
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        const image = new Image();
+        image.loading = 'lazy';
+        image.alt = 'Slice ' + (start + offset + 1);
+        image.src = entry.url;
+        const link = document.createElement('a');
+        link.className = 'save';
+        link.href = entry.url;
+        link.download = entry.name;
+        link.textContent = entry.name;
+        tile.append(image, link);
+        grid.append(tile);
+      });
+      previews.append(heading, grid);
+    }
+    status.textContent = sourceName + ' · 20 slices · ' + width + ' × ' + height + ' px each';
+    results.hidden = false;
+  } catch {
+    clearResults();
+    status.textContent = 'Could not export this image. Try a smaller image or a fixed-size preset.';
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
+}
+const crcTable = Uint32Array.from({length:256}, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+  return value;
+});
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 255];
+  return (crc ^ 0xffffffff) >>> 0;
+}
+async function createZip(files) {
+  const local = [], central = [];
+  const encoder = new TextEncoder();
+  let offset = 0, directoryLength = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const bytes = new Uint8Array(await file.blob.arrayBuffer());
+    const crc = crc32(bytes);
+    const header = new DataView(new ArrayBuffer(30));
+    const record = new DataView(new ArrayBuffer(46));
+    header.setUint32(0, 0x04034b50, true);
+    header.setUint16(4, 20, true);
+    header.setUint16(12, 33, true);
+    header.setUint32(14, crc, true);
+    header.setUint32(18, bytes.length, true);
+    header.setUint32(22, bytes.length, true);
+    header.setUint16(26, name.length, true);
+    record.setUint32(0, 0x02014b50, true);
+    record.setUint16(4, 20, true);
+    new Uint8Array(record.buffer).set(new Uint8Array(header.buffer, 4, 26), 6);
+    record.setUint32(42, offset, true);
+    local.push(header.buffer, name, file.blob);
+    central.push(record.buffer, name);
+    offset += 30 + name.length + bytes.length;
+    directoryLength += 46 + name.length;
+  }
+  if (offset + directoryLength + 22 > 0xffffffff) throw new Error('ZIP too large');
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, directoryLength, true);
+  end.setUint32(16, offset, true);
+  return new Blob([...local, ...central, end.buffer], {type:'application/zip'});
+}
+zip.addEventListener('click', async () => {
+  const selection = entries;
+  zip.disabled = true;
+  try {
+    const archive = await createZip(selection);
+    const url = URL.createObjectURL(archive);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'slice-a-photo.zip';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch {
+    if (selection === entries) status.textContent = 'Could not create the ZIP. Try JPG or a smaller image.';
+  } finally {
+    zip.disabled = false;
+  }
+});
+</script>
+</html>
