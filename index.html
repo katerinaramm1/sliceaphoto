@@ -9,18 +9,19 @@
 .smart{display:block;margin-top:16px}
 </style>
 <main>
-<header><button id="theme" type="button" aria-pressed="false">Dark mode</button><h1>Slice a Photo</h1><p>Turn one tall image into 20 numbered horizontal slices.</p></header>
+<header><button id="theme" type="button" aria-pressed="false">Dark mode</button><h1>Slice a Photo</h1><p>Turn one image into 20 numbered slices, left to right or top to bottom.</p></header>
 <section aria-label="Image and export settings">
-<div class="drop" id="drop"><label for="file">Drop one tall image here or choose a file</label><input id="file" type="file" accept="image/*"></div>
+<div class="drop" id="drop"><label for="file">Drop one image here or choose a file</label><input id="file" type="file" accept="image/*"></div>
 <div class="actions"><button id="sample">Try a sample image</button></div>
 <div class="controls">
-<label>Slice size<select id="size"><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original width</option></select></label>
+<label>Cut direction<select id="direction"><option value="auto">Auto (based on image shape)</option><option value="across">Left to right</option><option value="down">Top to bottom</option></select></label>
+<label>Slice size<select id="size"><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original scale</option></select></label>
 <label>Format<select id="format"><option value="jpeg">JPG</option><option value="png">PNG</option></select></label>
 <label id="qualityLabel">JPG quality <output id="qualityText">90%</output><input id="quality" type="range" min="50" max="100" value="90"></label>
 </div>
 <label class="smart"><input type="checkbox" id="smart" aria-describedby="smartHint"> Smart cuts</label>
 <p class="hint" id="smartHint">Look for quiet gaps near each cut to reduce splits through text. Content heights can vary, and padding keeps the exported files the same size.</p>
-<p class="hint">Every slice includes the full image width. Presets scale each slice proportionally and add padding as needed. Original width keeps the source width and fits every slice into the same whole-pixel output height.</p>
+<p class="hint">Presets scale each slice proportionally and add padding as needed. Original scale keeps the source pixel scale.</p>
 <p id="status" role="status">Your image is processed on your device.</p>
 </section>
 <section id="results" hidden>
@@ -38,6 +39,7 @@ const get = id => document.getElementById(id);
 const [file, drop, sample, size, format, quality, status, results, previews, zip] =
   ['file','drop','sample','size','format','quality','status','results','previews','zip'].map(get);
 const smart = get('smart');
+const direction = get('direction');
 const theme = get('theme');
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
 let preferredTheme;
@@ -81,9 +83,6 @@ async function loadImage(selected) {
     image.src = url;
     await image.decode();
     if (request !== upload) return;
-    if (image.naturalHeight <= image.naturalWidth || image.naturalHeight < count) {
-      throw new Error('Choose a vertical image that is at least 20 pixels tall.');
-    }
     source = image;
     sourceName = selected.name;
     schedule();
@@ -125,14 +124,14 @@ sample.addEventListener('click', () => {
   sourceName = 'Sample image';
   schedule();
 });
-for (const control of [size, format, quality, smart]) {
+for (const control of [size, format, quality, smart, direction]) {
   control.addEventListener('input', () => {
     get('qualityLabel').hidden = format.value === 'png';
     get('qualityText').value = quality.value + '%';
     if (source) schedule();
   });
 }
-function findCuts(image, width, height) {
+function findCuts(image, width, height, across) {
   const step = height / count;
   const cuts = Array.from({length: count + 1}, (_, index) => index * step);
   const radius = Math.floor(step * 0.18);
@@ -149,7 +148,14 @@ function findCuts(image, width, height) {
     const bandHeight = 2 * radius + 5;
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, scan.width, scan.height);
-    ctx.drawImage(image, 0, top, width, bandHeight, 0, 0, scan.width, scan.height);
+    if (across) {
+      ctx.save();
+      ctx.transform(0, 1, 1, 0, 0, 0);
+      ctx.drawImage(image, top, 0, bandHeight, width, 0, 0, scan.height, scan.width);
+      ctx.restore();
+    } else {
+      ctx.drawImage(image, 0, top, width, bandHeight, 0, 0, scan.width, scan.height);
+    }
     const {data} = ctx.getImageData(0, 0, scan.width, scan.height);
     const stride = scan.width * 4;
     const contrast = (a, b) => Math.max(
@@ -192,25 +198,35 @@ async function render(job) {
   const canvas = document.createElement('canvas');
   const generated = [];
   try {
-    const cuts = findCuts(image, originalWidth, sourceHeight);
+    const across = direction.value === 'across' ||
+      (direction.value === 'auto' && originalWidth > sourceHeight);
+    const axisLength = across ? originalWidth : sourceHeight;
+    if (axisLength < count) {
+      status.textContent = 'Choose a cut direction with at least 20 pixels along that axis.';
+      return;
+    }
+    const cuts = findCuts(image, across ? sourceHeight : originalWidth, axisLength, across);
     const heights = cuts.slice(1).map((bottom, index) => bottom - cuts[index]);
     const maxHeight = Math.max(...heights);
-    canvas.width = original ? originalWidth : 1080;
-    canvas.height = original ? Math.ceil(maxHeight - 1e-9) : Number(size.value);
+    const maxWidth = across ? maxHeight : originalWidth;
+    const maxSliceHeight = across ? sourceHeight : maxHeight;
+    canvas.width = original ? Math.ceil(maxWidth - 1e-9) : 1080;
+    canvas.height = original ? Math.ceil(maxSliceHeight - 1e-9) : Number(size.value);
     const width = canvas.width;
     const height = canvas.height;
-    const scale = original ? 1 : Math.min(width / originalWidth, height / maxHeight);
-    const drawnWidth = originalWidth * scale;
+    const scale = original ? 1 : Math.min(width / maxWidth, height / maxSliceHeight);
     const context = canvas.getContext('2d');
     for (let index = 0; index < count; index++) {
-      const sliceHeight = heights[index];
+      const sliceWidth = across ? heights[index] : originalWidth;
+      const sliceHeight = across ? sourceHeight : heights[index];
+      const drawnWidth = sliceWidth * scale;
       const drawnHeight = sliceHeight * scale;
       context.clearRect(0, 0, width, height);
       if (mime === 'image/jpeg') {
         context.fillStyle = '#fff';
         context.fillRect(0, 0, width, height);
       }
-      context.drawImage(image, 0, cuts[index], originalWidth, sliceHeight,
+      context.drawImage(image, across ? cuts[index] : 0, across ? 0 : cuts[index], sliceWidth, sliceHeight,
         (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
       const blob = await new Promise(resolve => canvas.toBlob(resolve, mime, qualityValue));
       if (job !== revision) return;
