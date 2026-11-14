@@ -15,13 +15,13 @@
 <div class="actions"><button id="sample">Try a sample image</button></div>
 <div class="controls">
 <label>Cut direction<select id="direction"><option value="auto">Auto (based on image shape)</option><option value="across">Left to right</option><option value="down">Top to bottom</option></select></label>
-<label>Slice size<select id="size"><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original scale</option></select></label>
+<label>Slice size<select id="size"><option value="tight">Slice only (no padding)</option><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original scale</option></select></label>
 <label>Format<select id="format"><option value="jpeg">JPG</option><option value="png">PNG</option></select></label>
 <label id="qualityLabel">JPG quality <output id="qualityText">90%</output><input id="quality" type="range" min="50" max="100" value="90"></label>
 </div>
 <label class="smart"><input type="checkbox" id="smart" aria-describedby="smartHint"> Smart cuts</label>
-<p class="hint" id="smartHint">Look for quiet gaps near each cut to reduce splits through text. Content heights can vary, and padding keeps the exported files the same size.</p>
-<p class="hint">Presets scale each slice proportionally and add padding as needed. Original scale keeps the source pixel scale.</p>
+<p class="hint" id="smartHint">Look for quiet gaps near each cut to reduce splits through text. With Slice only, smart cuts can produce slightly different file dimensions.</p>
+<p class="hint">Slice only exports the image content at its original scale. Fixed-size presets add padding as needed to match the selected dimensions. Original scale gives all slices a common canvas size.</p>
 <p id="status" role="status">Your image is processed on your device.</p>
 </section>
 <section id="results" hidden>
@@ -191,7 +191,8 @@ async function render(job) {
   const image = source;
   const originalWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
-  const original = size.value === 'original';
+  const tight = size.value === 'tight';
+  const original = tight || size.value === 'original';
   const mime = 'image/' + format.value;
   const qualityValue = Number(quality.value) / 100;
   const extension = mime === 'image/png' ? 'png' : 'jpg';
@@ -212,15 +213,20 @@ async function render(job) {
     const maxSliceHeight = across ? sourceHeight : maxHeight;
     canvas.width = original ? Math.ceil(maxWidth - 1e-9) : 1080;
     canvas.height = original ? Math.ceil(maxSliceHeight - 1e-9) : Number(size.value);
-    const width = canvas.width;
-    const height = canvas.height;
-    const scale = original ? 1 : Math.min(width / maxWidth, height / maxSliceHeight);
+
+    const scale = original ? 1 : Math.min(canvas.width / maxWidth, canvas.height / maxSliceHeight);
     const context = canvas.getContext('2d');
     for (let index = 0; index < count; index++) {
       const sliceWidth = across ? heights[index] : originalWidth;
       const sliceHeight = across ? sourceHeight : heights[index];
-      const drawnWidth = sliceWidth * scale;
-      const drawnHeight = sliceHeight * scale;
+      if (tight) {
+        canvas.width = Math.max(1, Math.round(sliceWidth));
+        canvas.height = Math.max(1, Math.round(sliceHeight));
+      }
+      const width = canvas.width;
+      const height = canvas.height;
+      const drawnWidth = tight ? width : sliceWidth * scale;
+      const drawnHeight = tight ? height : sliceHeight * scale;
       context.clearRect(0, 0, width, height);
       if (mime === 'image/jpeg') {
         context.fillStyle = '#fff';
@@ -256,7 +262,7 @@ async function render(job) {
       });
       previews.append(heading, grid);
     }
-    status.textContent = sourceName + ' · 20 slices · ' + width + ' × ' + height + ' px each';
+    status.textContent = sourceName + ' · 20 slices · ' + (tight ? 'no padding' : canvas.width + ' × ' + canvas.height + ' px each');
     results.hidden = false;
   } catch {
     clearResults();
