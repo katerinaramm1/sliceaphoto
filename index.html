@@ -9,11 +9,12 @@
 .smart{display:block;margin-top:16px}
 </style>
 <main>
-<header><button id="theme" type="button" aria-pressed="false">Dark mode</button><h1>Slice a Photo</h1><p>Turn one image into 20 numbered slices, left to right or top to bottom.</p></header>
+<header><button id="theme" type="button" aria-pressed="false">Dark mode</button><h1>Slice a Photo</h1><p>Turn one image into 2–20 numbered slices, left to right or top to bottom.</p></header>
 <section aria-label="Image and export settings">
 <div class="drop" id="drop"><label for="file">Drop one image here or choose a file</label><input id="file" type="file" accept="image/*"></div>
 <div class="actions"><button id="sample">Try a sample image</button></div>
 <div class="controls">
+<label>Number of slices<select id="sliceCount"><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16">16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20" selected>20</option></select></label>
 <label>Cut direction<select id="direction"><option value="auto">Auto (based on image shape)</option><option value="across">Left to right</option><option value="down">Top to bottom</option></select></label>
 <label>Slice size<select id="size"><option value="tight">Slice only (no padding)</option><option value="1350">1080 × 1350 (4:5)</option><option value="1920">1080 × 1920 (9:16)</option><option value="original">Original scale</option></select></label>
 <label>Format<select id="format"><option value="jpeg">JPG</option><option value="png">PNG</option></select></label>
@@ -25,16 +26,16 @@
 <p id="status" role="status">Your image is processed on your device.</p>
 </section>
 <section id="results" hidden>
-<h2>Preview all 20 slices</h2>
+<h2 id="previewTitle">Preview slices</h2>
 <p class="hint">For an X carousel-style thread, attach four images per post in order and add each new post as a reply to the previous one.</p>
-<button class="primary" id="zip">Download all 20 as ZIP</button>
+<button class="primary" id="zip">Download slices as ZIP</button>
 <div id="previews"></div>
 </section>
 <footer>Created by @katerinaramm1 on X with ChatGPT Plus. Slice a Photo is an independent tool and is not affiliated with X.</footer>
 </main>
 <script>
 'use strict';
-const count = 20;
+const sliceCount = document.getElementById('sliceCount');
 const get = id => document.getElementById(id);
 const [file, drop, sample, size, format, quality, status, results, previews, zip] =
   ['file','drop','sample','size','format','quality','status','results','previews','zip'].map(get);
@@ -68,7 +69,7 @@ function schedule() {
   const job = ++revision;
   clearResults();
   if (!source) return;
-  status.textContent = 'Preparing 20 slices…';
+  status.textContent = 'Preparing ' + sliceCount.value + ' slices…';
   timer = setTimeout(() => render(job), 100);
 }
 async function loadImage(selected) {
@@ -111,7 +112,7 @@ sample.addEventListener('click', () => {
   demo.height = 6000;
   const context = demo.getContext('2d');
   context.textAlign = 'center';
-  for (let index = 0; index < count; index++) {
+  for (let index = 0; index < 20; index++) {
     const y = index * 300;
     context.fillStyle = 'hsl(' + (80 + index * 13) + ' 44% 83%)';
     context.fillRect(0, y, 240, 300);
@@ -124,14 +125,14 @@ sample.addEventListener('click', () => {
   sourceName = 'Sample image';
   schedule();
 });
-for (const control of [size, format, quality, smart, direction]) {
+for (const control of [size, format, quality, smart, direction, sliceCount]) {
   control.addEventListener('input', () => {
     get('qualityLabel').hidden = format.value === 'png';
     get('qualityText').value = quality.value + '%';
     if (source) schedule();
   });
 }
-function findCuts(image, width, height, across) {
+function findCuts(image, width, height, across, count) {
   const step = height / count;
   const cuts = Array.from({length: count + 1}, (_, index) => index * step);
   const radius = Math.floor(step * 0.18);
@@ -189,6 +190,7 @@ function findCuts(image, width, height, across) {
 }
 async function render(job) {
   const image = source;
+  const count = Number(sliceCount.value);
   const originalWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
   const tight = size.value === 'tight';
@@ -203,10 +205,10 @@ async function render(job) {
       (direction.value === 'auto' && originalWidth > sourceHeight);
     const axisLength = across ? originalWidth : sourceHeight;
     if (axisLength < count) {
-      status.textContent = 'Choose a cut direction with at least 20 pixels along that axis.';
+      status.textContent = 'Choose a cut direction with at least ' + count + ' pixels along that axis.';
       return;
     }
-    const cuts = findCuts(image, across ? sourceHeight : originalWidth, axisLength, across);
+    const cuts = findCuts(image, across ? sourceHeight : originalWidth, axisLength, across, count);
     const heights = cuts.slice(1).map((bottom, index) => bottom - cuts[index]);
     const maxHeight = Math.max(...heights);
     const maxWidth = across ? maxHeight : originalWidth;
@@ -262,7 +264,9 @@ async function render(job) {
       });
       previews.append(heading, grid);
     }
-    status.textContent = sourceName + ' · 20 slices · ' + (tight ? 'no padding' : canvas.width + ' × ' + canvas.height + ' px each');
+    status.textContent = sourceName + ' · ' + count + ' slices · ' + (tight ? 'no padding' : canvas.width + ' × ' + canvas.height + ' px each');
+    get('previewTitle').textContent = 'Preview all ' + count + ' slices';
+    zip.textContent = 'Download all ' + count + ' as ZIP';
     results.hidden = false;
   } catch {
     clearResults();
@@ -334,4 +338,5 @@ zip.addEventListener('click', async () => {
   }
 });
 </script>
+<!-- Future update: research competing image splitters before choosing grid splitting and additional layouts. -->
 </html>
